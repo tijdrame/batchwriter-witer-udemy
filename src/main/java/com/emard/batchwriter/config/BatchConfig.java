@@ -8,6 +8,7 @@ import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Future;
 
 import javax.sql.DataSource;
 
@@ -17,10 +18,13 @@ import org.springframework.batch.core.configuration.annotation.EnableBatchProces
 import org.springframework.batch.core.configuration.annotation.JobBuilderFactory;
 import org.springframework.batch.core.configuration.annotation.StepBuilderFactory;
 import org.springframework.batch.core.configuration.annotation.StepScope;
+import org.springframework.batch.core.job.builder.FlowBuilder;
+import org.springframework.batch.core.job.flow.Flow;
+import org.springframework.batch.core.job.flow.support.SimpleFlow;
 import org.springframework.batch.core.launch.support.RunIdIncrementer;
-import org.springframework.batch.core.step.builder.StepBuilder;
-import org.springframework.batch.core.step.skip.AlwaysSkipItemSkipPolicy;
-import org.springframework.batch.item.adapter.ItemReaderAdapter;
+import org.springframework.batch.integration.async.AsyncItemProcessor;
+import org.springframework.batch.integration.async.AsyncItemWriter;
+import org.springframework.batch.item.ItemProcessor;
 import org.springframework.batch.item.database.ItemPreparedStatementSetter;
 import org.springframework.batch.item.database.JdbcBatchItemWriter;
 import org.springframework.batch.item.database.builder.JdbcBatchItemWriterBuilder;
@@ -37,13 +41,19 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.task.SimpleAsyncTaskExecutor;
 import org.springframework.oxm.xstream.XStreamMarshaller;
-import org.springframework.web.client.ResourceAccessException;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
-import com.emard.batchwriter.listener.ProductSkipListener;
 import com.emard.batchwriter.model.Product;
 import com.emard.batchwriter.processor.ProductProcessor;
-import com.emard.batchwriter.reader.ProductServiceAdapter;
+import com.emard.batchwriter.tasket.BusinessTasklet3;
+import com.emard.batchwriter.tasket.BusinessTasklet4;
+import com.emard.batchwriter.tasket.CleanupTasklet;
+import com.emard.batchwriter.tasket.ConsoleTasklet;
+import com.emard.batchwriter.tasket.DownloadTasklet;
+import com.emard.batchwriter.tasket.FileProcessTasklet;
+import com.emard.batchwriter.tasket.PagerDutyTasklet;
 
 @Configuration
 @EnableBatchProcessing
@@ -52,17 +62,17 @@ public class BatchConfig {
     private final StepBuilderFactory stepBuilder;
     private final JobBuilderFactory jobBuilder;
     private final DataSource dataSource;
-    private final ProductSkipListener productSkipListener;
+    //private final ProductSkipListener productSkipListener;
     private final ProductProcessor processor;
     //private final ProductServiceAdapter productAdapter;
 
     public BatchConfig(StepBuilderFactory stepBuilder, JobBuilderFactory jobBuilder,
-    DataSource dataSource, ProductSkipListener productSkipListener,
+    DataSource dataSource, //ProductSkipListener productSkipListener,
     ProductProcessor processor/*, ProductServiceAdapter productAdapter */) {
         this.stepBuilder = stepBuilder;
         this.jobBuilder = jobBuilder;
         this.dataSource = dataSource;
-        this.productSkipListener = productSkipListener;
+        //this.productSkipListener = productSkipListener;
         this.processor = processor;
         //this.productAdapter = productAdapter;
     }
@@ -178,11 +188,11 @@ public class BatchConfig {
     @Bean
     public Step step1() {
         return stepBuilder.get("step1")
-                .<Product, Product>chunk(3)
+                .<Product, Product>chunk(5)
                 .reader(flatFileSimpleItemReader(null))
                 .processor(processor)
-                //.writer(flatFileItemWriter(null))
-                .writer(jdbcWriter2())
+                .writer(flatFileItemWriter(null))
+                //.writer(jdbcWriter2())
                 .faultTolerant()
                 //.retry(FlatFileParseException.class)
                 //.retryLimit(5)
@@ -198,9 +208,150 @@ public class BatchConfig {
     }
 
     @Bean
+    public Step multi_thread_step() {
+        ThreadPoolTaskExecutor taskExecutor = new ThreadPoolTaskExecutor();
+        taskExecutor.setCorePoolSize(4);
+        taskExecutor.setMaxPoolSize(4);
+        taskExecutor.afterPropertiesSet();
+
+        return stepBuilder.get("multi_thread_step")
+                .<Product, Product>chunk(5)
+                .reader(flatFileSimpleItemReader(null))
+                .processor(processor)
+                //.writer(flatFileItemWriter(null))
+                .writer(jdbcWriter2())
+                .taskExecutor(taskExecutor)
+                
+                //.faultTolerant()
+                //.retry(FlatFileParseException.class)
+                //.retryLimit(5)
+                //.skip(FlatFileParseException.class)
+                //.skipLimit(3)
+                //.skipPolicy(new AlwaysSkipItemSkipPolicy())
+                //.skip(FlatFileParseException.class)
+                //.skip(RuntimeException.class)
+                //.skipLimit(20)//nb d'error autorisé
+                //.skipPolicy(new AlwaysSkipItemSkipPolicy())
+                //.listener(productSkipListener)
+                .build();
+    }
+
+    @Bean
+    public Step async_step() {
+        return stepBuilder.get("async_step")
+                .<Product, Future<Product>>chunk(5)
+                .reader(flatFileSimpleItemReader(null))
+                .processor(asyncItemProcessor())
+                .writer(asyncWriter())
+                //.writer(jdbcWriter2())
+                
+                //.faultTolerant()
+                //.retry(FlatFileParseException.class)
+                //.retryLimit(5)
+                //.skip(FlatFileParseException.class)
+                //.skipLimit(3)
+                //.skipPolicy(new AlwaysSkipItemSkipPolicy())
+                //.skip(FlatFileParseException.class)
+                //.skip(RuntimeException.class)
+                //.skipLimit(20)//nb d'error autorisé
+                //.skipPolicy(new AlwaysSkipItemSkipPolicy())
+                //.listener(productSkipListener)
+                .build();
+    }
+
+    @Bean
+    public ItemProcessor<Product, Future<Product>> asyncItemProcessor(){
+        AsyncItemProcessor<Product, Product> asyncProcessor = new AsyncItemProcessor<>();
+        asyncProcessor.setDelegate(processor);
+        asyncProcessor.setTaskExecutor(new SimpleAsyncTaskExecutor());
+        return asyncProcessor;
+    }
+
+    @Bean
+    public AsyncItemWriter<Product> asyncWriter (){
+        AsyncItemWriter<Product> asyncWriter = new AsyncItemWriter<>();
+        asyncWriter.setDelegate(flatFileItemWriter(null));
+        return asyncWriter;
+    }
+
+    @Bean
     public Step step0(){
         return stepBuilder.get("step0")
         .tasklet(new ConsoleTasklet())
+        .build();
+    }
+
+    /**
+     * Download - downloadStep
+     * Process file - processFileStep
+     * process another business item - businessTask3
+     * BusinessTask 4 - businessTask4
+     * Clean up step - cleanupTask
+     * 
+     */
+
+    @Bean
+    public Step downloadStep(){
+        return stepBuilder.get("downloadStep")
+        .tasklet(new DownloadTasklet()).build();
+    }
+
+    @Bean
+    public Step fileProcessStep(){
+        return stepBuilder.get("fileProcessStep")
+        .tasklet(new FileProcessTasklet()).build();
+    }
+
+    @Bean
+    public Step bizStep3(){
+        return stepBuilder.get("bizStep3")
+        .tasklet(new BusinessTasklet3()).build();
+    }
+
+    @Bean
+    public Step bizStep4(){
+        return stepBuilder.get("bizStep4")
+        .tasklet(new BusinessTasklet4()).build();
+    }
+
+    @Bean
+    public Step cleanupStep(){
+        return stepBuilder.get("cleanupStep")
+        .tasklet(new CleanupTasklet()).build();
+    }
+
+    @Bean
+    public Step pagerDutyStep(){
+        return stepBuilder.get("pagerDutyStep")
+        .tasklet(new PagerDutyTasklet()).build();
+    }
+
+    public Flow splitFlow(){
+        return new FlowBuilder<SimpleFlow>("splitFlow")
+        .split(new SimpleAsyncTaskExecutor())
+        .add(fileFlow(), bizFlow1(), bizFlow2())
+        .build();
+    }
+
+    public Flow fileFlow(){
+        return new FlowBuilder<SimpleFlow>("fileFlow")
+        .start(downloadStep())
+        .next(fileProcessStep())
+        .build();
+    }
+
+    public Flow bizFlow1(){
+        return new FlowBuilder<SimpleFlow>("bizFlow1")
+        .start(bizStep3())
+        .build();
+    }
+
+    public Flow bizFlow2(){
+        return new FlowBuilder<SimpleFlow>("bizFlow2")
+        .start(bizStep4())
+        .from(bizStep4()).on("*").end()
+        .on("FAILED")
+        .to(pagerDutyStep())
         .build();
     }
 
@@ -209,8 +360,9 @@ public class BatchConfig {
         return jobBuilder.get("helloWorldJob")
                 .incrementer(new RunIdIncrementer())
                 //.listener(executionListener)
-                .start(step0())
-                .next(step1())
+                .start(splitFlow())
+                .next(cleanupStep())
+                .end()
                 .build();
     }
 }

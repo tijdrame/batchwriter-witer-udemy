@@ -1,6 +1,5 @@
 package com.emard.batchwriter.reader;
 
-import org.springframework.stereotype.Component;
 
 import com.emard.batchwriter.model.Product;
 import com.emard.batchwriter.service.ProductService;

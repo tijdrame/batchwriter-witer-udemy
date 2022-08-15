@@ -7,7 +7,8 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 public class BatchwriterApplication {
 
 	public static void main(String[] args) {
-		SpringApplication.run(BatchwriterApplication.class, args);
+		System.exit(SpringApplication.exit(
+			SpringApplication.run(BatchwriterApplication.class, args)));
 	}
 
 }

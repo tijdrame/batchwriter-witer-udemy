@@ -1,6 +1,5 @@
 package com.emard.batchwriter.service;
 
-import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
 import com.emard.batchwriter.model.Product;
